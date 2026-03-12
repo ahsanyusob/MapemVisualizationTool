@@ -63,7 +63,7 @@ class MainApplication(Frame):
             fileStrVar = StringVar()
             fileStrVar.set(file)
             self.selectedFiles.append(fileStrVar)
-            selectedFilenames = selectedFilenames + "\n" + file.split("/")[-1]
+            selectedFilenames += "\n" + file.split("/")[-1]
         self.displayText.set("selected file:" + selectedFilenames)
         self.warningMessage.set("")
         self.warningLabel.pack_forget()  
@@ -71,7 +71,7 @@ class MainApplication(Frame):
         self.mapems = self.GetFilesAsListsOfDicts(self.selectedFiles)   
     
     def Click(self, event):
-        #self.filename.set(fd.askopenfilenames(parent= root, title='Choose a file', filetypes=[('MAPEM files', '*.xer;*.gser;*.json;*.xml')]))
+
         self.selectedFiles = []
         files = fd.askopenfilenames(parent= root, title='Choose a file', filetypes=[('MAPEM files', '*.xer;*.gser;*.json;*.xml')])
         fileNames = root.tk.splitlist(files)
@@ -80,8 +80,8 @@ class MainApplication(Frame):
             fileStrVar = StringVar()
             fileStrVar.set(file)
             self.selectedFiles.append(fileStrVar) 
-            fileNamesString =  fileNamesString + "\n" + file.split("/")[-1] 
-            
+            fileNamesString += "\n" + file.split("/")[-1]
+
         if  len(self.selectedFiles) > 0:               
             self.displayText.set("selected files:" + fileNamesString)
             self.warningMessage.set("")
@@ -116,13 +116,10 @@ class MainApplication(Frame):
                 return
             
         lanes,connectionLanes,refPoint = self.getLaneCoordiates(intersectionDict)
-            
 
-        if generateGpx: 
-            gpxThread = threading.Thread(target=self.generateGpxFile, args=(intersectionDict,), daemon= True)
+        if generateGpx:
+            threading.Thread(target=self.generateGpxFile, args=(intersectionDict,), daemon=True).start()
 
-            gpxThread.start()
-        
         if printGraph:
             # mathplot is not threadsave, so just run it in the main thread if required
             self.printGraph(lanes, connectionLanes, refPoint)    
@@ -131,11 +128,23 @@ class MainApplication(Frame):
     #region PyPlot
     def printGraph(self, lanes, connectionLanes, refPoint):
         for lane in lanes:
-            plt.plot(lane["x_vals"], lane["y_vals"], marker= lane["marker"], linestyle= lane["linestyle"], color = lane["color"], label = lane["label"] )
+            # convert from centimeters to meters
+            x_vals_m = [x / 100 for x in lane["x_vals"]]
+            y_vals_m = [y / 100 for y in lane["y_vals"]]
+            plt.plot(x_vals_m, y_vals_m, marker= lane["marker"], linestyle= lane["linestyle"], color = lane["color"], label = lane["label"] )
+
         for connectionLane in connectionLanes:
-            plt.plot(connectionLane["x_vals"], connectionLane["y_vals"], linestyle= connectionLane["linestyle"], color = connectionLane["color"], label = connectionLane["label"] )
+            x_vals_m = [x / 100 for x in connectionLane["x_vals"]]
+            y_vals_m = [y / 100 for y in connectionLane["y_vals"]]
+            plt.plot(x_vals_m, y_vals_m, linestyle=connectionLane["linestyle"], color = connectionLane["color"], label = connectionLane["label"] )
+
+        # reference point in meters is always the origin
+        plt.scatter(0, 0, color="red", s=200, label="Reference Point")
+
+        plt.xlabel("X [m]")
+        plt.ylabel("Y [m]")
+        plt.axis('equal')  # keep aspect ratio equal
         plt.legend()
-        plt.scatter(refPoint["long"], refPoint["lat"], color = "red", s = 200, label= "Refference Point")
         plt.show( )
         self.actionMessageString = self.actionMessageString + "Plotted MAPEM\n"
         self.actionMessage.set(self.actionMessageString)
@@ -203,41 +212,54 @@ class MainApplication(Frame):
         return lanes, connectionLanes, refPoint
     
     def CalcualteLanesAbsoluteOffsetList(self, mapem):
-        intersectionDict = {}
+
+        intersections = mapem["MAPEM"]["map"]["intersections"]["IntersectionGeometry"]
         if "MAPEM" not in mapem:
             self.warningMessage.set("No MAPEM found in file\nOnly .xer and .gser files are supported")
             self.warningLabel.pack()
             return 
 
-        for xmlTag, intersection in mapem["MAPEM"]["map"]["intersections"].items():
+        if not isinstance(intersections, list):
+            intersections = [intersections]
+
+        laneDict = {}
+        connectionList = []
+        refPoint = None
+
+        for intersection in intersections:
+
             if "name" in intersection:
                 name = intersection["name"]
             else:
-                name = self.filename.get().rsplit(".", 1)[0].rsplit("/",1)[1]
-            laneDict = {}
-            intersection["refPoint"]["lat"] = int(intersection["refPoint"]["lat"])/self._lonLatFloatAccuracy
-            intersection["refPoint"]["long"] = int(intersection["refPoint"]["long"])/self._lonLatFloatAccuracy
+                name = "intersection_" + str(intersection["id"]["id"])
+
+            intersection["refPoint"]["lat"] = int(intersection["refPoint"]["lat"]) / self._lonLatFloatAccuracy
+            intersection["refPoint"]["long"] = int(intersection["refPoint"]["long"]) / self._lonLatFloatAccuracy
+
             refPoint = intersection["refPoint"]
-            connectionList = [] # [0] = start, [1] = destination; biodirctional connections need to be duplicated in the list 
-            
+
             for laneNodeList in intersection["laneSet"]["GenericLane"]:
+
                 nodeList = []
                 connectionTree = []
                 
                 firstPoint = True
                 yAbsolute, xAbsolute = 0, 0
-                
-                for node in laneNodeList["nodeList"]["nodes"]["NodeXY"]:
+
+                nodes = laneNodeList["nodeList"]["nodes"]["NodeXY"]
+
+                if not isinstance(nodes, list):
+                    nodes = [nodes]
+
+                for node in nodes:
                     NodeOffsetPointXY = node["delta"]
-                    
                     if "lon" in list(NodeOffsetPointXY.values())[0]: 
                         xAbsolute, yAbsolute = self.XYOffsetCalc(refPoint, NodeOffsetPointXY["node-LatLon"]["lon"], NodeOffsetPointXY["node-LatLon"]["lat"])
                         Lon = int(NodeOffsetPointXY["node-LatLon"]["lon"])
                         Lat = int(NodeOffsetPointXY["node-LatLon"]["lat"])
-                    
                     else: 
-                        xAbsolute = xAbsolute + int(list(NodeOffsetPointXY.values())[0]["x"])
-                        yAbsolute = yAbsolute + int(list(NodeOffsetPointXY.values())[0]["y"])
+                        xAbsolute += int(list(NodeOffsetPointXY.values())[0]["x"])
+                        yAbsolute += int(list(NodeOffsetPointXY.values())[0]["y"])
                         Lat, Lon = self.LongLatCalc(refPoint, xAbsolute, yAbsolute )
                     
                     node = {
@@ -270,11 +292,9 @@ class MainApplication(Frame):
                         
                     connectItem = [ startPoint , endPoint, signalGroup]    
                     connectionList.append(connectItem)
-         
-            intersectionDict.update( {"RefPoint": refPoint})
-            intersectionDict.update( {"laneDict": laneDict})
-            intersectionDict.update( {"connectionList" : connectionList})
-        return intersectionDict
+
+        return {"laneDict": laneDict, "connectionList": connectionList, "RefPoint": refPoint}
+
 
                 
     def LongLatCalc(self, refPoint, xCentimeters, yCentimeters):
@@ -545,7 +565,6 @@ class MainApplication(Frame):
             mapemDict = None
             
             #parsing the file as mapem from json or xml, since we cant ensure the file ending to be correct (.xer.gser) we just try to parse and if it fails it fails.
-            #TODO: maybe dont do it with exception handeling, but by the file given ...
             try:
                 with open(filename.get(), 'r', encoding='utf-8') as file:
                     xmlStr = file.read()
@@ -574,11 +593,25 @@ class MainApplication(Frame):
             return mapemDictList
         self.warningLabel.pack()
         self.warningMessage.set(givenMapemCheckResult[1])
+        return mapemDictList
 
 #endregion
         
 
 if __name__ == "__main__":
     root = TkinterDnD.Tk()
-    MainApplication(root).pack(side="top", fill="both", expand=True)
-    root.mainloop()
+    # Proper way to close is to click the "X" button on top right of the App GUI.
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    try:
+        app = MainApplication(root)
+        app.pack(side="top", fill="both", expand=True)
+        root.mainloop()
+    except (KeyboardInterrupt, SystemExit):
+        # Catch Ctrl+C in the terminal. Will take effect after clicking on the App GUI.
+        # Avoid Ctrl+Z. Kill all opened windows stuck in a loop with
+        #   pkill -9 -f MAPEMvisualizationTool.py
+        pass
+    finally:
+        # Ensures the window and process die together
+        try: root.destroy()
+        except: pass
