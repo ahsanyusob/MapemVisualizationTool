@@ -1,0 +1,3 @@
+*.gpx
+*.vscode
+*__pycache__/
