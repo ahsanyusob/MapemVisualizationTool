@@ -5,6 +5,7 @@ import logging
 import threading
 import pymap3d as pm
 import matplotlib.pyplot as plt
+import mplcursors
 import random
 import tkinter.filedialog as fd
 import re
@@ -127,29 +128,89 @@ class MainApplication(Frame):
     
     #region PyPlot
     def printGraph(self, lanes, connectionLanes, refPoint):
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # --- Plotting ---
+        all_lines = []
         for lane in lanes:
-            # convert from centimeters to meters
-            x_vals_m = [x / 100 for x in lane["x_vals"]]
-            y_vals_m = [y / 100 for y in lane["y_vals"]]
-            plt.plot(x_vals_m, y_vals_m, marker= lane["marker"], linestyle= lane["linestyle"], color = lane["color"], label = lane["label"] )
+            line, = ax.plot([x / 100 for x in lane["x_vals"]], 
+                            [y / 100 for y in lane["y_vals"]], 
+                            marker=lane["marker"], linestyle=lane["linestyle"], 
+                            color=lane["color"], label=lane["label"])
+            all_lines.append(line)
 
         for connectionLane in connectionLanes:
-            x_vals_m = [x / 100 for x in connectionLane["x_vals"]]
-            y_vals_m = [y / 100 for y in connectionLane["y_vals"]]
-            plt.plot(x_vals_m, y_vals_m, linestyle=connectionLane["linestyle"], color = connectionLane["color"], label = connectionLane["label"] )
+            line, = ax.plot([x / 100 for x in connectionLane["x_vals"]], 
+                            [y / 100 for y in connectionLane["y_vals"]], 
+                            linestyle=connectionLane["linestyle"], 
+                            color=connectionLane["color"], label=connectionLane["label"])
+            all_lines.append(line)
 
-        # reference point in meters is always the origin
-        plt.scatter(0, 0, color="red", s=200, label="Reference Point")
+        ax.scatter(0, 0, color="red", s=200, label=f"Reference Position\n{refPoint['lat'], refPoint['long']}")
+        
+        # --- Interactivity ---
+        # added mplcursors interactivity
+        cursor = mplcursors.cursor(ax, hover=True)
+        cursor.connect("add", lambda sel: sel.annotation.set_text(sel.artist.get_label()))
 
-        plt.xlabel("X [m]")
-        plt.ylabel("Y [m]")
-        plt.axis('equal')  # keep aspect ratio equal
-        plt.legend()
-        plt.show( )
-        self.actionMessageString = self.actionMessageString + "Plotted MAPEM\n"
-        self.actionMessage.set(self.actionMessageString)
-        self.messageLabel.pack()
+        leg = ax.legend(loc='upper left', fontsize='x-small', ncol=2)
+        lined = {legline: origline for legline, origline in zip(leg.get_lines(), all_lines)}
+        for legline in leg.get_lines(): legline.set_picker(5)
 
+        # --- Pan and Zoom State ---
+        # mplcursors hover-detection captures mouse events, 
+        # overriding the default toolbar panning and zooming.
+        # We manually re-implement these to restore direct navigation.
+        self.press = None
+
+        def on_press(event):
+            if event.inaxes != ax: return
+            self.press = (event.xdata, event.ydata)
+
+        def on_release(event):
+            self.press = None
+
+        def on_motion(event):
+            if self.press is None or event.inaxes != ax: return
+            dx = event.xdata - self.press[0]
+            dy = event.ydata - self.press[1]
+            ax.set_xlim(ax.get_xlim() - dx)
+            ax.set_ylim(ax.get_ylim() - dy)
+            fig.canvas.draw_idle()
+
+        # Connect Pan Events
+        fig.canvas.mpl_connect('button_press_event', on_press)
+        fig.canvas.mpl_connect('button_release_event', on_release)
+        fig.canvas.mpl_connect('motion_notify_event', on_motion)
+
+        # Connect Toggle/Pick Events
+        def on_pick(event):
+            if event.artist in lined:
+                origline = lined[event.artist]
+                vis = not origline.get_visible()
+                origline.set_visible(vis)
+                event.artist.set_alpha(1.0 if vis else 0.2)
+                fig.canvas.draw_idle()
+        fig.canvas.mpl_connect('pick_event', on_pick)
+
+        # Connect Scroll Events
+        def on_scroll(event):
+            if event.inaxes != ax: return
+            scale = 1.1 if event.button == 'down' else 1/1.1
+            xlim, ylim = ax.get_xlim(), ax.get_ylim()
+            x, y = event.xdata, event.ydata
+            ax.set_xlim([x - (x - xlim[0]) * scale, x + (xlim[1] - x) * scale])
+            ax.set_ylim([y - (y - ylim[0]) * scale, y + (ylim[1] - y) * scale])
+            fig.canvas.draw_idle()
+        fig.canvas.mpl_connect('scroll_event', on_scroll)
+
+        ax.set_xlabel("X [m]")
+        ax.set_ylabel("Y [m]")
+        ax.axis('equal')
+        ax.grid(True, linestyle=':', alpha=0.6)
+        
+        plt.show()
     #endregion
     
     #region Calculations

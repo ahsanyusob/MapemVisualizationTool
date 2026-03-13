@@ -1,0 +1,6 @@
+matplotlib
+mplcursors
+pymap3d
+tkinter
+tkinterdnd2
+xmltodict
